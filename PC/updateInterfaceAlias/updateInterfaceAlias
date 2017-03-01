@@ -1,6 +1,7 @@
-#!/usr/bin/python
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 from xml.sax.saxutils import escape
 from progressbar import Bar, Percentage, ProgressBar
 from threading import  Thread
@@ -24,10 +25,12 @@ parser.add_argument("-P", "--port", type=int, default=8181)
 parser.add_argument("-u", "--user", default=u'admin')
 parser.add_argument("-p", "--password", default=u'admin')
 parser.add_argument("-t", "--threads", type=int, default=4)
-parser.add_argument("-d", "--debug", action="store_true")
+parser.add_argument("--debug", action="store_true")
 parser.add_argument("-v", "--verbose", action="store_true")
 parser.add_argument("-s", "--statusbar", action="store_true")
-parser.add_argument("-e", "--exceptions", nargs='*')
+parser.add_argument("-Do", "--domainsexception", nargs='*')
+parser.add_argument("-d", "--devices", nargs='*')
+parser.add_argument("-D", "--devicesexception", nargs='*')
 args = parser.parse_args()
 
 
@@ -92,23 +95,20 @@ class ThreadPool:
 def updateDevice(device):
     ifCount = 0
     deviceUri = u"http://{0}:{1}/pc/center/webservice/devices/deviceItemId/{2}".format(args.url, args.port, device.itemId.cdata)
-    xmlstring = u'<interfaces>\n'
+    xmlstring = u'<interfaces>'
     interfacesRequest = get(deviceUri+u"/interfaces", auth=(args.user, args.password))
-    xmlInterfaces = untangle.parse(interfacesRequest.text)
-    if xmlInterfaces.interfaces.get_elements(name=u'interface'):        
+    xmlInterfaces = untangle.parse(interfacesRequest.content)
+    if xmlInterfaces.interfaces.get_elements(name=u'interface'):
         for interface in xmlInterfaces.interfaces.interface:
             if interface.get_elements(name=u'ifAlias') and (interface.ifAlias.cdata != interface.nameAlias.cdata) and interface.ifAlias.cdata != u'':
                 ifCount += 1
-                xmlstring += u'''   <interface>
-      <itemId>{0}</itemId>
-      <nameAlias>{1}</nameAlias>
-   </interface>\n'''.format(interface.itemId.cdata, escape(interface.ifAlias.cdata))
+                xmlstring += u'''<interface><itemId>{0}</itemId><nameAlias>{1}</nameAlias></interface>'''.format(interface.itemId.cdata, escape(interface.ifAlias.cdata))
         xmlstring += u' </interfaces>'
         if ifCount > 0:
             data = 0
-            interfacesUpdateRequest = put(deviceUri+u"/setInterfaceNameAlias", data=xmlstring, headers={u'Content-Type': u'application/xml'}, auth=(args.user, args.password))
+            interfacesUpdateRequest = put(deviceUri+u"/setInterfaceNameAlias", data=xmlstring.encode('utf-8'), headers={u'Content-Type': u'application/xml'}, auth=(args.user, args.password))
             if interfacesUpdateRequest.status_code != 200:
-                logger.error(u'Failed to update device ID {} got {} from server'.format(device.itemId.cdata, interfacesUpdateRequest.status_code))
+                logger.error(u'Failed to update device ID {0} got {1} from server with xml data:\n{2}'.format(device.itemId.cdata, interfacesUpdateRequest.status_code, repr(xmlstring)))
             interfacesUpdateRequest.raise_for_status()
         else:
             xmlstring = u'No Interfaces update'
@@ -120,23 +120,42 @@ def updateDevice(device):
 try:
 
     logger.debug(u'Starting downloading of devices:')
-    devicesRequest = get(u"http://{0}:{1}/pc/center/webservice/devices".format(args.url, args.port), auth=(args.user, args.password))
-    xmlDevices = untangle.parse(devicesRequest.text)
     deviceCount = 0
-    if args.statusbar and not args.debug and not args.verbose:
-        pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(xmlDevices.devices.device)).start()
-
     # Instantiate a thread pool
     pool = ThreadPool(args.threads)
-    for device in xmlDevices.devices.device:
-        deviceCount = deviceCount + 1
-        if args.exceptions is None or device.domainId.cdata not in args.exceptions: #ID Excetiopn 448515
-            pool.map(updateDevice, device)
+
+    if args.devices:
         if args.statusbar and not args.debug and not args.verbose:
-            pbar.update(deviceCount)
-    pool.wait_completion()
+            pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(args.devices)).start()
+        for device in args.devices:
+            deviceCount = deviceCount + 1
+            logger.debug('fetching device ID: '+device)
+            devicesRequest = get(u"http://{0}:{1}/pc/center/webservice/devices/deviceItemId/{2}".format(args.url, args.port, device), auth=(args.user, args.password))
+            xmlDevice = untangle.parse(devicesRequest.content)
+            pool.map(updateDevice, xmlDevice.device)
+            if args.statusbar and not args.debug and not args.verbose:
+                pbar.update(deviceCount)
+    else:
+        devicesRequest = get(u"http://{0}:{1}/pc/center/webservice/devices".format(args.url, args.port), auth=(args.user, args.password))
+        xmlDevices = untangle.parse(devicesRequest.text)
+
+        if args.statusbar and not args.debug and not args.verbose:
+            pbar = ProgressBar(widgets=[Percentage(), Bar()], maxval=len(xmlDevices.devices.device)).start()
+
+            for device in xmlDevices.devices.device:
+                deviceCount = deviceCount + 1
+                if ((args.domainsexception is None or
+                     device.domainId.cdata not in args.domainsexception) and
+                        (args.devicesexception is None or
+                         device.itemId.cdata not in args.devicesexception)):
+                    pool.map(updateDevice, device)
+                if args.statusbar and not args.debug and not args.verbose:
+                    pbar.update(deviceCount)
 
     if args.statusbar and not args.debug and not args.verbose:
         pbar.finish()
+
+    pool.wait_completion()
+
 except KeyboardInterrupt:
     logger.error(u'Exiting')

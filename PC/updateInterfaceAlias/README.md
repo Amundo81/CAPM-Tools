@@ -9,4 +9,4 @@ untangle
 progressbar
 
 ## Usage
-./interfaceAliasUpdate -u USERNAME -p PASSWORD -U URL -e DOMAINEXCEPTION -t THREADS --statusbar --debug
+./updateInterfaceAlias -u USERNAME -p PASSWORD -U URL -Do DOMAINSEXCEPTION -d DEVICESID -D DEVICESIDEXCEPTION -t THREADS --statusbar --debug
